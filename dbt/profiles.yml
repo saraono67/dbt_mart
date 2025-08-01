@@ -1,0 +1,13 @@
+dbt_tutorial:
+  outputs:
+    dev:
+      dataset: dbt_tutorial
+      job_execution_timeout_seconds: 3600
+      job_retries: 1
+      location: US
+      method: oauth
+      priority: interactive
+      project: apt-task-466209-f1
+      threads: 1
+      type: bigquery
+  target: dev
