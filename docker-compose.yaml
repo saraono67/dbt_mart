@@ -1,0 +1,20 @@
+version: '3'
+services:
+  dbt_work:
+    platform: linux/x86_64
+    build:
+      context: ./
+      dockerfile: ./Dockerfile
+    container_name: dbt_work_container
+    volumes:
+      #dbt_work以下を、/work/dbtにマウントする
+      - ./dbt:/work/dbt
+      #コンテナに環境変数をマウントする
+      - ~/.config/gcloud:/root/.config/gcloud
+    ports:
+      - 8080:8080
+    environment:
+      ENV: dev
+    entrypoint: /bin/bash
+    stdin_open: true
+    tty: true
