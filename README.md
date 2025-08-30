@@ -15,6 +15,17 @@
   - **VS Code** と **Git** の連携、リポジトリの作成
       - [参考記事](https://qiita.com/yuto_h9m8/items/1d5867981c81a18bc1db)
 
+
+また、以下のファイルをプロジェクトのルートディレクトリに作成する。
+-   `Dockerfile`（AWSのジョブ実行用のdockerコンテナ）
+-   `Dockerfile.local`(開発用のdockerコンテナ)
+-   `docker-compose.yaml`
+-   `poetry.toml`
+-   `poetry.lock` (poetryコマンドを任意に実行して作成)
+
+以下のファイルを./dbt/binに作成する
+-   `run.sh`(AWSのジョブ実行時のコマンドを記載する)
+
 -----
 
 ### 2\. ツールインストール (Mac/zsh)
@@ -100,11 +111,8 @@ zshターミナルで以下のコマンドを実行し、必要なツールを�
     ```bash
     docker compose version
     ```
-
 -----
-### 補足
-1.  `Dockerfile` ・`docker-compose.yaml`・ `poetry.toml`は準備しておく
-2.  poetryコマンドを任意に実行して`poetry.lock`は準備しておく
+
 
 ### 3\. コンテナの起動とプロジェクト初期化
 
@@ -139,3 +147,78 @@ zshターミナルで以下のコマンドを実行し、必要なツールを�
 3.  `ESC` キーで編集モードを終了する。
 
 4.  `:w !sudo tee %` を入力して強制保存する。
+-----
+
+### 4. AWS Batch実行環境のセットアップ
+
+#### 4.1. IAMロールの作成
+AWSサービスが連携するために必要なIAMロールを作成する。
+* **`AWSBatchServiceRole`**: AWS BatchサービスがAWSリソースを管理するために必要なロール。
+* **`AmazonECSTaskExecutionRolePolicy`**: コンテナがECRやCloudWatchにアクセスするために必要なポリシー。`BatchEcsTaskExecutionRole`（任意の名前）というロールに付与する
+
+#### 4.2. BigQuery認証キーとSecrets Managerの設定
+dbtがBigQueryに接続するための認証情報を設定する。
+1.  **BigQuery認証キーの取得**:
+    * Google Cloudコンソールで「IAM と管理」→「サービス アカウント」に移動。
+    * `dbt-runner`（任意の名前）を作成し、「BigQuery データ編集者」と「BigQuery ジョブユーザー」のロールを付与する。
+    * 「キー」タブから、JSON形式の新しい鍵を生成し、ダウンロードする。
+2.  **AWS Secrets Managerへの登録**:
+    * AWS Secrets Managerで「その他のシークレット」タイプを選択し、新しいシークレットを作成する。
+    * キーに`google_sa_key`（任意の名前）と入力し、値にダウンロードしたJSONファイルの中身を貼り付ける。
+    * シークレットに`dbt/bigquery/service_account`（任意の名前）を付けて保存する。
+
+#### 4.3. AWS Batchの設定
+AWS Batchでジョブを実行するための環境を構築する。
+1.  **ジョブ実行ロールの権限付与**:
+    * Secrets Managerで、シークレットを取得するためのカスタムポリシー（`secretsmanager:GetSecretValue`アクションを許可）を新規作成する
+    * `BatchEcsTaskExecutionRole`にアタッチする
+2.  **コンピューティング環境の作成**:
+    * コンピューティング環境設定
+        * コンピューティング: Fargate
+        * サービスロール：AWSBatchServiceRoleForBatch（デフォルト値）
+    * インスタンス設定:
+        * 最大vCPU：４（仮）
+        * vCPUはdbtのコンテナ内で実行される前処理や後処理、および並列処理のスレッド数に影響する。dbtの設定で、threadsの数をvCPU数より多く設定しても、vCPUがボトルネックになり、パフォーマンスが向上しない場合がある
+
+3.  **ジョブキューの作成**:
+    * 作成したコンピューティング環境と紐づくジョブキューを作成する。
+4.  **ジョブ定義の設定**:
+    * **コンテナ設定**: ECRにプッシュしたDockerイメージのURIを入力する。
+    * **コマンド - オプション**: **空欄。**　実際のコマンドはdbt/bin/run.shに記述するため
+    * **シークレット**: Secrets Managerで作成したキーのARNを登録する。
+        * **名前**: `GOOGLE_APPLICATION_CREDENTIALS`
+        * **値**: Secrets ManagerのシークレットのARN
+5.  **ジョブの作成**:
+    * 作成したジョブ定義とジョブキューを指定してジョブを作成する。
+
+-----
+
+### 5. DockerイメージのビルドとECRへのプッシュ
+dbtプロジェクトのDockerfileを使用してイメージをビルドし、ECRにプッシュする。
+1. AWS CLIのインストール
+    * [公式ドキュメント](https://docs.aws.amazon.com/ja_jp/cli/latest/userguide/getting-started-install.html)を参考にインストールする。
+2.  ECRへの認証を行う。
+    ```bash
+    #aws ecr get-login-password --region <リージョン名> | docker login --username AWS --password-stdin <ユーザーID>.dkr.ecr.<リージョン名>.amazonaws.com
+    aws ecr get-login-password --region ap-northeast-1 | docker login --username AWS --password-stdin 501235162149.dkr.ecr.ap-northeast-1.amazonaws.com
+    ```
+3. ECRのリポジトリを作成する.
+    * リポジトリ名
+        * 501235162149.dkr.ecr.ap-northeast-1.amazonaws.com/`dbt_work_dev_server(任意の名前)`
+
+4.  イメージをビルドする。
+    ```bash
+    #docker build --platform linux/amd64 --provenance=false -t <docerイメージ名> .
+    
+    docker build --platform linux/amd64 --provenance=false -t dbt_work_dev .
+    ```
+5.  ECRリポジトリのタグを付ける。(タグ名=latest)
+    ```bash
+    #docker tag <docerイメージ名>:latest <ユーザーID>.dkr.ecr.<リージョン名> .amazonaws.com/<ECRリポジトリ名>:latest
+    docker tag dbt_work_dev:latest 501235162149.dkr.ecr.ap-northeast-1.amazonaws.com/dbt_work_dev_server:latest
+    ```
+5.  イメージをECRにプッシュする。
+    ```bash
+    # docker push <ユーザーID>.dkr.ecr.<リージョン名>.amazonaws.com/<ECRリポジトリ名>:latest
+    docker push 501235162149.dkr.ecr.ap-northeast-1.amazonaws.com/dbt_work_dev_server:latest
+    ```

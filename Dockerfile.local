@@ -23,11 +23,5 @@ RUN poetry install --no-root
 
 #dbtにprofiles.ymlの場所を教える（elementaryの使用時に必要）
 ENV DBT_PROFILES_DIR /work/dbt
-
-# dbtプロジェクトをコンテナにコピー
-COPY ./dbt /work/dbt
-
-WORKDIR /work/dbt
-#ベースイメージで'dbt'というentrypointが設定されているため無効化
+#ベースイメージで'dbt'というentrypointが設定されているため、無効化する
 ENTRYPOINT []
-CMD ["/bin/bash", "./bin/run.sh"]
